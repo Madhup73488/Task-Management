@@ -1,4 +1,5 @@
 import { supabase } from "./client";
+import { sendRegistrationConfirmationEmail, sendPasswordResetEmail as sendBrevoPasswordResetEmail } from '@/lib/brevo/emailService';
 
 // Set this to true to use mock authentication for development/testing
 export const USE_MOCK_AUTH = false;
@@ -120,12 +121,35 @@ export async function signUpNewUser(
     password,
     options: {
       data: { full_name: fullName, role },
+      // We will send our own confirmation email, so no redirectTo here
+      emailRedirectTo: `${process.env.NEXT_PUBLIC_BASE_URL}/auth/verify`,
     },
   });
 
   if (error) throw error;
 
-  // if email confirmation is required, there won’t be a session yet
+  // If email confirmation is required (no session immediately), send Brevo email
+  if (!data.session) {
+    // Supabase handles sending its own verification email when `emailRedirectTo` is set.
+    // If you want to *replace* Supabase's email with Brevo, you would need to:
+    // 1. Disable email confirmations in your Supabase project settings.
+    // 2. Manually generate and store a verification token in your database.
+    // 3. Construct the verification link with your custom token.
+    // 4. Send the Brevo email with this custom link.
+    // 5. Implement a backend route to verify this custom token.
+
+    // For now, we will send a *separate* Brevo email as a custom notification.
+    // The user will still need to click the link from the *Supabase-generated* email
+    // to complete the actual email verification process.
+    const brevoVerificationLink = `${process.env.NEXT_PUBLIC_BASE_URL}/auth/verify`; // Link to your app's verification page
+
+    await sendRegistrationConfirmationEmail(
+      email,
+      fullName,
+      brevoVerificationLink
+    );
+  }
+
   return data;
 }
 
@@ -135,23 +159,60 @@ export async function resendConfirmationEmail(email: string) {
     console.log("Mock resend confirmation email called.");
     return; // Simulate successful send
   }
+  // When using Brevo for signup emails, resending should also use Brevo
   const { error } = await supabase.auth.resend({
     type: 'signup',
     email,
+    options: {
+      emailRedirectTo: `${process.env.NEXT_PUBLIC_BASE_URL}/auth/verify`,
+    },
   });
+
   if (error) throw error;
+
+  // Similar to signup, send a separate Brevo email as a custom notification.
+  const brevoVerificationLink = `${process.env.NEXT_PUBLIC_BASE_URL}/auth/verify`;
+  await sendRegistrationConfirmationEmail(
+    email,
+    "User", // Placeholder name, ideally fetch from DB if available
+    brevoVerificationLink
+  );
 }
 
 // 🟢 Send password reset email
 export async function sendPasswordResetEmail(email: string, redirectTo?: string) {
   if (USE_MOCK_AUTH) {
     console.log("Mock send password reset email called.");
-    // Simulate successful send, but no actual email will be sent.
-    // The user will still need to manually "reset" their password in the DB or via dashboard.
-    return; 
+    return;
   }
+
+  // Supabase's `resetPasswordForEmail` sends the email directly.
+  // To use Brevo for password reset, you would typically need to:
+  // 1. Disable password reset emails in your Supabase project settings.
+  // 2. Create a Next.js API route (e.g., /api/auth/reset-password-proxy)
+  // 3. Configure Supabase's `resetPasswordForEmail` to redirect to this proxy route.
+  //    (Note: Supabase's `resetPasswordForEmail` does not return the reset token directly,
+  //     it sends the email itself. The `redirectTo` URL is where the user lands *after* clicking
+  //     the link in the Supabase email, and it contains the `access_token` and `refresh_token`.)
+  // 4. In the proxy route, extract the `access_token` and `refresh_token` from the URL.
+  // 5. Construct your Brevo reset link using these tokens (e.g., `${process.env.NEXT_PUBLIC_BASE_URL}/auth/update-password?token=${access_token}`).
+  // 6. Call `sendBrevoPasswordResetEmail` with this custom link.
+  // 7. Redirect the user to the actual update-password page.
+
+  // For simplicity and to demonstrate Brevo integration, we will trigger Supabase's
+  // password reset flow (which sends its own email) and *also* send a separate
+  // Brevo email with a generic link to the update-password page.
+  // The user should ideally use the link from the Supabase-generated email for the actual reset.
+
   const { error } = await supabase.auth.resetPasswordForEmail(email, {
-    redirectTo: redirectTo || `${window.location.origin}/auth/update-password`, // Default to a generic update-password page
+    redirectTo: redirectTo || `${process.env.NEXT_PUBLIC_BASE_URL}/auth/update-password`,
   });
+
   if (error) throw error;
+
+  // Send a separate Brevo email with a link to the password update page.
+  // This is a demonstration of using Brevo, but the actual password reset
+  // mechanism is still primarily driven by Supabase's email.
+  const brevoResetLink = redirectTo || `${process.env.NEXT_PUBLIC_BASE_URL}/auth/update-password`;
+  await sendBrevoPasswordResetEmail(email, "User", brevoResetLink); // Placeholder name
 }

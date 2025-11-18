@@ -36,6 +36,7 @@ import {
   DialogTitle,
   DialogTrigger,
 } from "@/app/components/ui/dialog";
+import { sendTaskAssignmentNotification } from '@/lib/brevo/emailService';
 
 interface User {
   id: string;
@@ -163,9 +164,11 @@ export default function AdminTasksPage() {
 
       if (error) throw error;
 
+      const createdTask = data[0];
+
       // Add user data to the new task
       const newTaskWithUser = {
-        ...data[0],
+        ...createdTask,
         users: newTaskAssignedTo
           ? users.find((u) => u.id === newTaskAssignedTo)
           : null,
@@ -178,6 +181,19 @@ export default function AdminTasksPage() {
       setNewTaskStatus("not_picked");
       setNewTaskPriority("medium");
       setNewTaskDeadline("");
+      
+      // Send task assignment notification if assigned to an employee
+      if (newTaskAssignedTo && newTaskWithUser.users) {
+        const assignedUser = newTaskWithUser.users;
+        const taskLink = `${process.env.NEXT_PUBLIC_BASE_URL}/mytasks/${createdTask.id}`;
+        await sendTaskAssignmentNotification(
+          assignedUser.email,
+          assignedUser.full_name,
+          createdTask.title,
+          taskLink,
+          currentUser.full_name // Assigner's name
+        );
+      }
       setNewTaskAssignedTo("");
     } catch (err: any) {
       setError(err.message || "Failed to create task.");
@@ -248,6 +264,10 @@ export default function AdminTasksPage() {
 
       if (error) throw error;
 
+      // Find the original task to compare assigned_to
+      const originalTask = tasks.find(task => task.id === editingTask.id);
+      const oldAssignedTo = originalTask?.assigned_to;
+
       // Update the task in state
       const updatedTaskWithUser = {
         ...editingTask,
@@ -261,6 +281,19 @@ export default function AdminTasksPage() {
           task.id === editingTask.id ? (updatedTaskWithUser as Task) : task
         )
       );
+
+      // Send task assignment notification if assigned_to changed
+      if (editingTask.assigned_to && editingTask.assigned_to !== oldAssignedTo && updatedTaskWithUser.users) {
+        const assignedUser = updatedTaskWithUser.users;
+        const taskLink = `${process.env.NEXT_PUBLIC_BASE_URL}/mytasks/${editingTask.id}`;
+        await sendTaskAssignmentNotification(
+          assignedUser.email,
+          assignedUser.full_name,
+          editingTask.title,
+          taskLink,
+          currentUser.full_name // Assigner's name
+        );
+      }
 
       setIsEditDialogOpen(false);
       setEditingTask(null);
