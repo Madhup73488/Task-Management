@@ -32,6 +32,7 @@ import {
 import {
   Dialog,
   DialogContent,
+  DialogDescription,
   DialogHeader,
   DialogTitle,
   DialogTrigger,
@@ -346,6 +347,9 @@ export default function AdminTasksPage() {
             <DialogContent className="sm:max-w-[425px]">
               <DialogHeader>
                 <DialogTitle>Create New Task</DialogTitle>
+                <DialogDescription>
+                  Fill in the details below to create a new task.
+                </DialogDescription>
               </DialogHeader>
               <form onSubmit={handleCreateTask} className="grid gap-4 py-4">
                 <div className="grid gap-2">
@@ -441,6 +445,9 @@ export default function AdminTasksPage() {
             <DialogContent className="sm:max-w-[425px]">
               <DialogHeader>
                 <DialogTitle>Edit Task</DialogTitle>
+                <DialogDescription>
+                  Make changes to the task details.
+                </DialogDescription>
               </DialogHeader>
               {editingTask && (
                 <form onSubmit={handleUpdateTask} className="grid gap-4 py-4">

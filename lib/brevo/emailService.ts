@@ -27,8 +27,8 @@ export async function sendEmail({
   params,
   tags,
 }: SendEmailParams) {
-  const apiKey = process.env.BREVO_API_KEY;
-  const defaultSenderEmail = process.env.BREVO_SENDER_EMAIL || 'no-reply@yourdomain.com';
+  const apiKey = process.env.NEXT_PUBLIC_BREVO_API_KEY;
+  const defaultSenderEmail = process.env.NEXT_PUBLIC_BREVO_SENDER_EMAIL || 'no-reply@yourdomain.com';
   const defaultSenderName = 'Task Management System';
 
   const finalSender = sender || { email: defaultSenderEmail, name: defaultSenderName };
