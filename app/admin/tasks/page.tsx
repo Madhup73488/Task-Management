@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams, usePathname } from "next/navigation"; // Import useSearchParams and usePathname
 import { supabase } from "@/lib/supabase/client";
 import { getCurrentUser } from "@/lib/supabase/auth-helpers";
 import { Button } from "@/app/components/ui/button";
@@ -38,6 +38,7 @@ import {
   DialogTrigger,
 } from "@/app/components/ui/dialog";
 import { sendTaskAssignmentNotification } from '@/lib/brevo/emailService';
+import { useDebounce } from '@/app/hooks/use-debounce';
 
 interface User {
   id: string;
@@ -57,7 +58,7 @@ interface Task {
   created_by: string;
   created_at: string;
   updated_at: string;
-  users: { full_name: string } | null; // For assigned_to user's name
+  users: { full_name: string; email: string } | null; // Added email for search
 }
 
 export default function AdminTasksPage() {
@@ -69,6 +70,10 @@ export default function AdminTasksPage() {
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [isEditDialogOpen, setIsEditDialogOpen] = useState(false);
   const [editingTask, setEditingTask] = useState<Task | null>(null);
+  
+  const initialSearch = useSearchParams().get("search") || "";
+  const [search, setSearch] = useState(initialSearch); // State for search input, initialized from URL
+  const debouncedSearch = useDebounce(search, 500); // Debounced search term
 
   // New Task Form State
   const [newTaskTitle, setNewTaskTitle] = useState("");
@@ -83,9 +88,28 @@ export default function AdminTasksPage() {
   const [newTaskAssignedTo, setNewTaskAssignedTo] = useState("");
 
   const router = useRouter();
+  const searchParams = useSearchParams(); // Initialize useSearchParams
+  const pathname = usePathname(); // Get current pathname
+
+  useEffect(() => {
+    const currentSearchParams = new URLSearchParams(searchParams.toString());
+    if (debouncedSearch) {
+      currentSearchParams.set('search', debouncedSearch);
+    } else {
+      currentSearchParams.delete('search');
+    }
+    // Only replace if the search parameter actually changed to avoid unnecessary re-renders
+    if (currentSearchParams.toString() !== searchParams.toString()) {
+        router.replace(`${pathname}?${currentSearchParams.toString()}`);
+    }
+  }, [debouncedSearch, pathname, router, searchParams]);
+
 
   useEffect(() => {
     const fetchData = async () => {
+      setLoading(true); // Set loading to true at the start of fetch
+      setError(null); // Clear any previous errors
+
       try {
         const user = await getCurrentUser();
         if (!user || user.role !== "admin") {
@@ -94,7 +118,22 @@ export default function AdminTasksPage() {
         }
         setCurrentUser(user);
 
-        // Fetch tasks without join first
+        // Fetch all users first
+        const { data: usersData, error: usersError } = await supabase
+          .from("users")
+          .select("id, full_name, email");
+
+        if (usersError) {
+          console.error("Users error:", usersError);
+          throw usersError;
+        }
+        setUsers(usersData as User[]);
+
+        // Get search query from URL
+        const currentSearchQuery = searchParams.get("search") || "";
+        // No setSearch(currentSearchQuery) here; input is controlled by local `search` state
+
+        // Fetch all tasks without search filter in Supabase, we'll filter client-side
         const { data: tasksData, error: tasksError } = await supabase
           .from("tasks")
           .select("*")
@@ -105,27 +144,39 @@ export default function AdminTasksPage() {
           throw tasksError;
         }
 
-        // Fetch all users
-        const { data: usersData, error: usersError } = await supabase
-          .from("users")
-          .select("id, full_name");
-
-        if (usersError) {
-          console.error("Users error:", usersError);
-          throw usersError;
-        }
-
-        setUsers(usersData as User[]);
-
-        // Manually join user data with tasks
-        const tasksWithUsers = (tasksData || []).map((task) => ({
-          ...task,
-          users: task.assigned_to
+        // Manually join user data with tasks and apply client-side search
+        const tasksWithUsers = (tasksData || []).map((task) => {
+          const assignedUser = task.assigned_to
             ? usersData?.find((u) => u.id === task.assigned_to)
-            : null,
-        }));
+            : null;
+          return { ...task, users: assignedUser };
+        }).filter(task => {
+          if (!currentSearchQuery) return true; // If no search query, show all tasks
 
-        setTasks(tasksWithUsers as Task[]);
+          const lowerCaseSearchQuery = currentSearchQuery.toLowerCase();
+
+          // Check if title or description matches
+          if (
+            task.title.toLowerCase().includes(lowerCaseSearchQuery) ||
+            task.description.toLowerCase().includes(lowerCaseSearchQuery)
+          ) {
+            return true;
+          }
+
+          // Check if assigned user's name or email matches
+          if (task.users) {
+            if (
+              task.users.full_name?.toLowerCase().includes(lowerCaseSearchQuery) ||
+              task.users.email?.toLowerCase().includes(lowerCaseSearchQuery)
+            ) {
+              return true;
+            }
+          }
+
+          return false; // No match found
+        }); 
+
+        setTasks(tasksWithUsers as Task[]); 
       } catch (err: any) {
         setError(err.message || "An unexpected error occurred.");
         console.error("Error fetching data:", err);
@@ -134,7 +185,7 @@ export default function AdminTasksPage() {
       }
     };
     fetchData();
-  }, [router]);
+  }, [router, searchParams, debouncedSearch]); 
 
   const handleCreateTask = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -188,11 +239,10 @@ export default function AdminTasksPage() {
         const assignedUser = newTaskWithUser.users;
         const taskLink = `${process.env.NEXT_PUBLIC_BASE_URL}/mytasks/${createdTask.id}`;
         await sendTaskAssignmentNotification(
-          assignedUser.email,
-          assignedUser.full_name,
+          assignedUser.id,
           createdTask.title,
           taskLink,
-          currentUser.full_name // Assigner's name
+          "Mallika M." // Assigner's name
         );
       }
       setNewTaskAssignedTo("");
@@ -233,13 +283,13 @@ export default function AdminTasksPage() {
   const getStatusStyle = (status: string) => {
     switch (status) {
       case "completed":
-        return "bg-green-100 text-green-800 border-green-300";
+        return "bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-50 border-green-300 dark:border-green-700";
       case "in_progress":
-        return "bg-blue-100 text-blue-800 border-blue-300";
+        return "bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-50 border-blue-300 dark:border-blue-700";
       case "not_picked":
-        return "bg-white text-black border-gray-300";
+        return "bg-white text-gray-800 dark:bg-gray-700 dark:text-gray-50 border-gray-300 dark:border-gray-600";
       default:
-        return "bg-white text-black border-gray-300";
+        return "bg-white text-gray-800 dark:bg-gray-700 dark:text-gray-50 border-gray-300 dark:border-gray-600";
     }
   };
 
@@ -288,11 +338,10 @@ export default function AdminTasksPage() {
         const assignedUser = updatedTaskWithUser.users;
         const taskLink = `${process.env.NEXT_PUBLIC_BASE_URL}/mytasks/${editingTask.id}`;
         await sendTaskAssignmentNotification(
-          assignedUser.email,
-          assignedUser.full_name,
+          assignedUser.id,
           editingTask.title,
           taskLink,
-          currentUser.full_name // Assigner's name
+          "Mallika M." // Assigner's name
         );
       }
 
@@ -327,24 +376,25 @@ export default function AdminTasksPage() {
   }
 
   return (
-    <div className="p-6">
-      <Card className="border-gray-200 shadow-sm">
-        <CardHeader className="flex flex-row items-center justify-between bg-gradient-to-r from-gray-50 to-white border-b border-gray-100">
-          <div>
-            <CardTitle className="text-2xl font-bold text-gray-900">
-              Task Management
-            </CardTitle>
-            <p className="text-sm text-gray-600 mt-1">
-              Create and manage tasks for your team
-            </p>
-          </div>
-          <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
-            <DialogTrigger asChild>
-              <Button className="bg-green-600 hover:bg-green-700 text-white">
-                Create New Task
-              </Button>
-            </DialogTrigger>
-            <DialogContent className="sm:max-w-[425px]">
+    <div className="p-3 md:p-6">
+      <Card className="bg-white dark:bg-black border-gray-200 dark:border-gray-800 shadow-sm overflow-hidden">
+        <CardHeader className="bg-gradient-to-r from-black via-gray-900 to-black dark:from-gray-950 dark:via-black dark:to-gray-950 border-b border-gray-800 dark:border-gray-900 p-4 md:p-6">
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 md:gap-4">
+            <div>
+              <CardTitle className="text-xl md:text-2xl font-bold text-white">
+                Task Management
+              </CardTitle>
+              <p className="text-xs md:text-sm text-gray-300 dark:text-gray-400 mt-1">
+                Create and manage tasks for your team
+              </p>
+            </div>
+            <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
+              <DialogTrigger asChild>
+                <Button className="bg-emerald-600 hover:bg-emerald-700 text-white text-sm w-full sm:w-auto shadow-lg">
+                  Create New Task
+                </Button>
+              </DialogTrigger>
+            <DialogContent className="sm:max-w-[425px] max-h-[90vh] overflow-y-auto">
               <DialogHeader>
                 <DialogTitle>Create New Task</DialogTitle>
                 <DialogDescription>
@@ -439,10 +489,11 @@ export default function AdminTasksPage() {
               </form>
             </DialogContent>
           </Dialog>
+          </div>
 
           {/* Edit Task Dialog */}
           <Dialog open={isEditDialogOpen} onOpenChange={setIsEditDialogOpen}>
-            <DialogContent className="sm:max-w-[425px]">
+            <DialogContent className="sm:max-w-[425px] max-h-[90vh] overflow-y-auto">
               <DialogHeader>
                 <DialogTitle>Edit Task</DialogTitle>
                 <DialogDescription>
@@ -557,67 +608,133 @@ export default function AdminTasksPage() {
             </DialogContent>
           </Dialog>
         </CardHeader>
-        <CardContent>
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Title</TableHead>
-                <TableHead>Status</TableHead>
-                <TableHead>Priority</TableHead>
-                <TableHead>Deadline</TableHead>
-                <TableHead>Assigned To</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {tasks.map((task) => (
-                <TableRow key={task.id} className="hover:bg-gray-50">
-                  <TableCell 
-                    className="font-medium text-blue-600 hover:text-blue-800 cursor-pointer"
-                    onClick={() => router.push(`/admin/tasks/${task.id}`)}
-                  >
-                    {task.title}
-                  </TableCell>
-                  <TableCell onClick={(e) => e.stopPropagation()}>
-                    <Select
-                      value={task.status}
-                      onValueChange={(value: "not_picked" | "in_progress" | "completed") => 
-                        handleStatusChange(task.id, value)
-                      }
-                    >
-                      <SelectTrigger 
-                        className={`w-[140px] ${getStatusStyle(task.status)}`}
-                      >
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="not_picked">Not Picked</SelectItem>
-                        <SelectItem value="in_progress">In Progress</SelectItem>
-                        <SelectItem value="completed">Completed</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </TableCell>
-                  <TableCell 
-                    className="cursor-pointer"
-                    onClick={() => router.push(`/admin/tasks/${task.id}`)}
-                  >
-                    {task.priority}
-                  </TableCell>
-                  <TableCell 
-                    className="cursor-pointer"
-                    onClick={() => router.push(`/admin/tasks/${task.id}`)}
-                  >
-                    {task.deadline}
-                  </TableCell>
-                  <TableCell 
-                    className="cursor-pointer"
-                    onClick={() => router.push(`/admin/tasks/${task.id}`)}
-                  >
-                    {task.users?.full_name || "Unassigned"}
-                  </TableCell>
+        <CardContent className="p-4 md:p-6">
+          {/* Search Bar */}
+          <div className="mb-6">
+            <div className="relative">
+              <svg
+                className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400 dark:text-gray-500"
+                fill="none"
+                stroke="currentColor"
+                viewBox="0 0 24 24"
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={2}
+                  d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"
+                />
+              </svg>
+              <Input
+                type="text"
+                placeholder="Search tasks by title, description, or assigned user..."
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                className="pl-10 bg-white dark:bg-gray-900 border-gray-300 dark:border-gray-700 h-10 text-gray-900 dark:text-white placeholder:text-gray-500 dark:placeholder:text-gray-400"
+              />
+            </div>
+          </div>
+          <div className="overflow-x-auto">
+            <Table>
+              <TableHeader>
+                <TableRow className="dark:border-gray-800 bg-gray-50 dark:bg-gray-900/50 border-b-2 border-gray-200 dark:border-gray-800">
+                  <TableHead className="text-gray-900 dark:text-white text-sm font-semibold">Title</TableHead>
+                  <TableHead className="text-gray-900 dark:text-white text-sm font-semibold">Status</TableHead>
+                  <TableHead className="text-gray-900 dark:text-white text-sm font-semibold">Priority</TableHead>
+                  <TableHead className="text-gray-900 dark:text-white text-sm font-semibold">Deadline</TableHead>
+                  <TableHead className="text-gray-900 dark:text-white text-sm font-semibold">Assigned To</TableHead>
                 </TableRow>
-              ))}
-            </TableBody>
-          </Table>
+              </TableHeader>
+              <TableBody>
+                {tasks.map((task) => (
+                  <TableRow key={task.id} className="hover:bg-gray-50 dark:hover:bg-gray-900/50 dark:border-gray-800 transition-colors border-b border-gray-100 dark:border-gray-800/50">
+                    <TableCell 
+                      className="font-medium text-blue-600 dark:text-blue-400 hover:text-blue-700 dark:hover:text-blue-300 cursor-pointer text-sm hover:underline"
+                      onClick={() => router.push(`/admin/tasks/${task.id}`)}
+                    >
+                      <div className="truncate max-w-[200px] md:max-w-none">{task.title}</div>
+                    </TableCell>
+                    <TableCell onClick={(e) => e.stopPropagation()}>
+                      <Select
+                        value={task.status}
+                        onValueChange={(value: "not_picked" | "in_progress" | "completed") => 
+                          handleStatusChange(task.id, value)
+                        }
+                      >
+                        <SelectTrigger 
+                          className={`w-[120px] md:w-[140px] text-xs md:text-sm border-0 font-medium shadow-sm ${getStatusStyle(task.status)}`}
+                        >
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="not_picked">Not Picked</SelectItem>
+                          <SelectItem value="in_progress">In Progress</SelectItem>
+                          <SelectItem value="completed">Completed</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </TableCell>
+                    <TableCell 
+                      className="cursor-pointer text-sm"
+                      onClick={() => router.push(`/admin/tasks/${task.id}`)}
+                    >
+                      <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
+                        task.priority === "high" 
+                          ? "bg-red-100 text-red-800 dark:bg-red-900/50 dark:text-red-300"
+                          : task.priority === "medium"
+                          ? "bg-yellow-100 text-yellow-800 dark:bg-yellow-900/50 dark:text-yellow-300"
+                          : "bg-gray-100 text-gray-800 dark:bg-gray-800 dark:text-gray-300"
+                      }`}>
+                        {task.priority}
+                      </span>
+                    </TableCell>
+                    <TableCell 
+                      className="cursor-pointer text-sm text-gray-600 dark:text-gray-400"
+                      onClick={() => router.push(`/admin/tasks/${task.id}`)}
+                    >
+                      {task.deadline}
+                    </TableCell>
+                    <TableCell 
+                      className="cursor-pointer text-sm text-gray-600 dark:text-gray-400"
+                      onClick={() => router.push(`/admin/tasks/${task.id}`)}
+                    >
+                      <div className="truncate max-w-[150px] md:max-w-none">{task.users?.full_name || "Unassigned"}</div>
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </div>
+          {tasks.length === 0 && (
+            <div className="text-center py-8 md:py-12 px-4">
+              <svg
+                className="h-10 w-10 md:h-12 md:w-12 mx-auto mb-4 text-gray-400 dark:text-gray-600"
+                fill="none"
+                stroke="currentColor"
+                viewBox="0 0 24 24"
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={2}
+                  d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"
+                />
+              </svg>
+              <h3 className="text-sm md:text-base font-semibold mb-2 text-gray-900 dark:text-white">
+                No tasks found
+              </h3>
+              <p className="text-xs md:text-sm text-gray-500 dark:text-gray-400 mb-4">
+                {searchParams.get("search") ? `No tasks match "${searchParams.get("search")}"` : "Create your first task to get started"}
+              </p>
+              {!searchParams.get("search") && (
+                <Button
+                  onClick={() => setIsDialogOpen(true)}
+                  className="bg-emerald-600 hover:bg-emerald-700 text-white text-sm shadow-lg"
+                >
+                  Create New Task
+                </Button>
+              )}
+            </div>
+          )}
         </CardContent>
       </Card>
     </div>

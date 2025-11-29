@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams, usePathname } from "next/navigation";
 import { supabase } from "@/lib/supabase/client";
 import { getCurrentUser } from "@/lib/supabase/auth-helpers";
 import {
@@ -34,6 +34,7 @@ import {
   MoreVertical,
   Eye,
 } from "lucide-react";
+import { useDebounce } from '@/app/hooks/use-debounce';
 
 interface Task {
   id: string;
@@ -53,10 +54,40 @@ export default function MyTasksPage() {
   const [tasks, setTasks] = useState<Task[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [searchQuery, setSearchQuery] = useState("");
   const [filterStatus, setFilterStatus] = useState<string>("all");
   const [darkMode, setDarkMode] = useState(false);
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const pathname = usePathname();
+  
+  // Read search query directly from URL - this is the source of truth
+  const urlSearch = searchParams.get("search") || "";
+  
+  // Use URL search directly for filtering (no local state needed for filtering)
+  const [localSearchInput, setLocalSearchInput] = useState(urlSearch);
+  const debouncedLocalSearch = useDebounce(localSearchInput, 300);
+
+  // Sync local input with URL when URL changes (from header search)
+  useEffect(() => {
+    const newUrlSearch = searchParams.get("search") || "";
+    console.log("🔍 URL search parameter:", newUrlSearch);
+    setLocalSearchInput(newUrlSearch);
+  }, [searchParams]);
+
+  // Update URL when debounced local search changes (from local search bar)
+  useEffect(() => {
+    const currentSearch = searchParams.get('search') || "";
+    
+    if (debouncedLocalSearch !== currentSearch) {
+      const newParams = new URLSearchParams(searchParams.toString());
+      if (debouncedLocalSearch) {
+        newParams.set('search', debouncedLocalSearch);
+      } else {
+        newParams.delete('search');
+      }
+      router.replace(`${pathname}?${newParams.toString()}`, { scroll: false });
+    }
+  }, [debouncedLocalSearch, pathname, router, searchParams]);
 
   useEffect(() => {
     const checkDarkMode = () => {
@@ -138,14 +169,26 @@ export default function MyTasksPage() {
     }
   };
 
+  // Use URL search directly for filtering - this ensures immediate response
   const filteredTasks = tasks.filter((task) => {
-    const matchesSearch =
-      task.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      task.description.toLowerCase().includes(searchQuery.toLowerCase());
+    const searchLower = urlSearch.toLowerCase().trim();
+    const matchesSearch = !searchLower || 
+      task.title.toLowerCase().includes(searchLower) ||
+      task.description.toLowerCase().includes(searchLower);
     const matchesFilter =
       filterStatus === "all" || task.status === filterStatus;
+    
+    console.log(`📝 Task "${task.title}" - Search: "${urlSearch}" - Match: ${matchesSearch}`);
     return matchesSearch && matchesFilter;
   });
+
+  // Debug logging
+  useEffect(() => {
+    console.log("🔎 Active search query from URL:", urlSearch);
+    console.log("📊 Total tasks:", tasks.length);
+    console.log("✅ Filtered tasks:", filteredTasks.length);
+    console.log("🎯 Tasks:", filteredTasks.map(t => t.title));
+  }, [urlSearch, tasks.length, filteredTasks.length, filteredTasks]);
 
   const tasksByStatus = {
     not_picked: filteredTasks.filter((t) => t.status === "not_picked"),
@@ -230,28 +273,28 @@ export default function MyTasksPage() {
   };
 
   return (
-    <div className="p-6">
-      <div className="space-y-6">
+    <div className="p-3 md:p-6">
+      <div className="space-y-4 md:space-y-6">
         {/* Header */}
-        <div className="flex items-center justify-between">
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
           <div>
-            <h1 className={`text-3xl font-bold ${darkMode ? 'text-white' : 'text-gray-900'}`}>My Tasks</h1>
-            <p className={`mt-1 ${darkMode ? 'text-gray-400' : 'text-gray-600'}`}>
+            <h1 className={`text-2xl md:text-3xl font-bold ${darkMode ? 'text-white' : 'text-gray-900'}`}>My Tasks</h1>
+            <p className={`mt-1 text-sm md:text-base ${darkMode ? 'text-gray-400' : 'text-gray-600'}`}>
               Manage and track your assigned tasks
             </p>
           </div>
           <Badge
             variant="secondary"
-            className={`text-sm px-3 py-1 ${darkMode ? 'bg-gray-800 text-white' : 'bg-gray-100 text-gray-900'}`}
+            className={`text-sm px-3 py-1 w-fit ${darkMode ? 'bg-gray-800 text-white' : 'bg-gray-100 text-gray-900'}`}
           >
             {tasks.length} Total
           </Badge>
         </div>
 
         {/* Stats Cards */}
-        <div className="grid gap-4 md:grid-cols-3">
+        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 md:gap-4">
           <Card className={`shadow-sm ${darkMode ? 'bg-black border-gray-800' : 'bg-white border-gray-200'}`}>
-            <CardContent className="p-6">
+            <CardContent className="p-4 md:p-6">
               <div className="flex items-center justify-between">
                 <div>
                   <p className={`text-sm font-medium ${darkMode ? 'text-gray-400' : 'text-gray-600'}`}>
@@ -269,13 +312,13 @@ export default function MyTasksPage() {
           </Card>
 
           <Card className={`shadow-sm ${darkMode ? 'bg-black border-gray-800' : 'bg-white border-gray-200'}`}>
-            <CardContent className="p-6">
+            <CardContent className="p-4 md:p-6">
               <div className="flex items-center justify-between">
                 <div>
                   <p className={`text-sm font-medium ${darkMode ? 'text-gray-400' : 'text-gray-600'}`}>
                     In Progress
                   </p>
-                  <p className={`text-3xl font-bold ${darkMode ? 'text-white' : 'text-gray-900'}`}>
+                  <p className={`text-2xl md:text-3xl font-bold ${darkMode ? 'text-white' : 'text-gray-900'}`}>
                     {tasksByStatus.in_progress.length}
                   </p>
                 </div>
@@ -287,11 +330,11 @@ export default function MyTasksPage() {
           </Card>
 
           <Card className={`shadow-sm ${darkMode ? 'bg-black border-gray-800' : 'bg-white border-gray-200'}`}>
-            <CardContent className="p-6">
+            <CardContent className="p-4 md:p-6">
               <div className="flex items-center justify-between">
                 <div>
                   <p className={`text-sm font-medium ${darkMode ? 'text-gray-400' : 'text-gray-600'}`}>Completed</p>
-                  <p className={`text-3xl font-bold ${darkMode ? 'text-white' : 'text-gray-900'}`}>
+                  <p className={`text-2xl md:text-3xl font-bold ${darkMode ? 'text-white' : 'text-gray-900'}`}>
                     {tasksByStatus.completed.length}
                   </p>
                 </div>
@@ -303,99 +346,88 @@ export default function MyTasksPage() {
           </Card>
         </div>
 
-        {/* Search and Filter */}
+        {/* Filter Buttons Only - Search is in header */}
         <Card className={`shadow-sm ${darkMode ? 'bg-black border-gray-800' : 'bg-white border-gray-200'}`}>
-          <CardContent className="p-6">
-            <div className="flex flex-col md:flex-row gap-4">
-              <div className="relative flex-1">
-                <Search className={`absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 ${darkMode ? 'text-gray-500' : 'text-gray-400'}`} />
-                <Input
-                  placeholder="Search tasks..."
-                  value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
-                  className={`pl-10 ${darkMode ? 'bg-gray-900 border-gray-800 text-white placeholder:text-gray-500' : ''}`}
-                />
-              </div>
-              <div className="flex gap-2">
-                <Button
-                  variant={filterStatus === "all" ? "default" : "outline"}
-                  onClick={() => setFilterStatus("all")}
-                  className={`gap-1 ${darkMode && filterStatus !== "all" ? 'text-gray-300 border-gray-700 hover:bg-gray-800' : ''}`}
-                >
-                  <Filter className="h-4 w-4" />
-                  All
-                </Button>
-                <Button
-                  variant={
-                    filterStatus === "not_picked" ? "default" : "outline"
-                  }
-                  onClick={() => setFilterStatus("not_picked")}
-                  className={darkMode && filterStatus !== "not_picked" ? 'text-gray-300 border-gray-700 hover:bg-gray-800' : ''}
-                >
-                  Not Started
-                </Button>
-                <Button
-                  variant={
-                    filterStatus === "in_progress" ? "default" : "outline"
-                  }
-                  onClick={() => setFilterStatus("in_progress")}
-                  className={darkMode && filterStatus !== "in_progress" ? 'text-gray-300 border-gray-700 hover:bg-gray-800' : ''}
-                >
-                  In Progress
-                </Button>
-                <Button
-                  variant={filterStatus === "completed" ? "default" : "outline"}
-                  onClick={() => setFilterStatus("completed")}
-                  className={darkMode && filterStatus !== "completed" ? 'text-gray-300 border-gray-700 hover:bg-gray-800' : ''}
-                >
-                  Completed
-                </Button>
-              </div>
+          <CardContent className="p-4 md:p-6">
+            <div className="flex flex-wrap gap-2">
+              <Button
+                variant={filterStatus === "all" ? "default" : "outline"}
+                onClick={() => setFilterStatus("all")}
+                className={`gap-1 text-sm ${darkMode && filterStatus !== "all" ? 'text-gray-300 border-gray-700 hover:bg-gray-800' : ''}`}
+              >
+                <Filter className="h-4 w-4" />
+                All
+              </Button>
+              <Button
+                variant={
+                  filterStatus === "not_picked" ? "default" : "outline"
+                }
+                onClick={() => setFilterStatus("not_picked")}
+                className={`text-sm ${darkMode && filterStatus !== "not_picked" ? 'text-gray-300 border-gray-700 hover:bg-gray-800' : ''}`}
+              >
+                Not Started
+              </Button>
+              <Button
+                variant={
+                  filterStatus === "in_progress" ? "default" : "outline"
+                }
+                onClick={() => setFilterStatus("in_progress")}
+                className={`text-sm ${darkMode && filterStatus !== "in_progress" ? 'text-gray-300 border-gray-700 hover:bg-gray-800' : ''}`}
+              >
+                In Progress
+              </Button>
+              <Button
+                variant={filterStatus === "completed" ? "default" : "outline"}
+                onClick={() => setFilterStatus("completed")}
+                className={`text-sm ${darkMode && filterStatus !== "completed" ? 'text-gray-300 border-gray-700 hover:bg-gray-800' : ''}`}
+              >
+                Completed
+              </Button>
             </div>
           </CardContent>
         </Card>
 
         {/* Tasks Table */}
         <Card className={`shadow-sm ${darkMode ? 'bg-black border-gray-800' : 'border-gray-200'}`}>
-          <CardHeader>
-            <CardTitle className={darkMode ? 'text-white' : ''}>All Tasks</CardTitle>
+          <CardHeader className="p-4 md:p-6">
+            <CardTitle className={`text-lg md:text-xl ${darkMode ? 'text-white' : ''}`}>All Tasks</CardTitle>
           </CardHeader>
-          <CardContent>
+          <CardContent className="p-0 md:p-6 md:pt-0">
             {filteredTasks.length === 0 ? (
-              <div className="p-12 text-center">
-                <AlertCircle className={`h-12 w-12 mx-auto mb-4 ${darkMode ? 'text-gray-600' : 'text-gray-400'}`} />
-                <h3 className={`text-lg font-semibold mb-2 ${darkMode ? 'text-white' : 'text-gray-900'}`}>
+              <div className="p-8 md:p-12 text-center">
+                <AlertCircle className={`h-10 w-10 md:h-12 md:w-12 mx-auto mb-4 ${darkMode ? 'text-gray-600' : 'text-gray-400'}`} />
+                <h3 className={`text-base md:text-lg font-semibold mb-2 ${darkMode ? 'text-white' : 'text-gray-900'}`}>
                   No tasks found
                 </h3>
-                <p className={darkMode ? 'text-gray-400' : 'text-gray-600'}>
-                  You don't have any tasks assigned yet.
+                <p className={`text-sm md:text-base ${darkMode ? 'text-gray-400' : 'text-gray-600'}`}>
+                  {urlSearch ? `No tasks match "${urlSearch}"` : "You don't have any tasks assigned yet."}
                 </p>
               </div>
             ) : (
               <div className="overflow-x-auto">
-                <table className="w-full">
+                <table className="w-full min-w-[640px]">
                   <thead>
                     <tr className={darkMode ? 'border-gray-800' : 'border-b'}>
-                      <th className={`text-left p-3 font-medium ${darkMode ? 'text-white' : 'text-gray-900'}`}>Title</th>
-                      <th className={`text-left p-3 font-medium ${darkMode ? 'text-white' : 'text-gray-900'}`}>Status</th>
-                      <th className={`text-left p-3 font-medium ${darkMode ? 'text-white' : 'text-gray-900'}`}>Priority</th>
-                      <th className={`text-left p-3 font-medium ${darkMode ? 'text-white' : 'text-gray-900'}`}>Deadline</th>
+                      <th className={`text-left p-2 md:p-3 font-medium text-sm md:text-base ${darkMode ? 'text-white' : 'text-gray-900'}`}>Title</th>
+                      <th className={`text-left p-2 md:p-3 font-medium text-sm md:text-base ${darkMode ? 'text-white' : 'text-gray-900'}`}>Status</th>
+                      <th className={`text-left p-2 md:p-3 font-medium text-sm md:text-base ${darkMode ? 'text-white' : 'text-gray-900'}`}>Priority</th>
+                      <th className={`text-left p-2 md:p-3 font-medium text-sm md:text-base ${darkMode ? 'text-white' : 'text-gray-900'}`}>Deadline</th>
                     </tr>
                   </thead>
                   <tbody>
                     {filteredTasks.map((task) => (
                       <tr key={task.id} className={`${darkMode ? 'border-gray-800 hover:bg-gray-800' : 'border-b hover:bg-gray-50'}`}>
                         <td 
-                          className={`p-3 font-medium cursor-pointer ${
+                          className={`p-2 md:p-3 font-medium cursor-pointer text-sm md:text-base ${
                             darkMode 
                               ? 'text-blue-400 hover:text-blue-300' 
                               : 'text-blue-600 hover:text-blue-800'
                           }`}
                           onClick={() => router.push(`/mytasks/${task.id}`)}
                         >
-                          {task.title}
+                          <div className="truncate max-w-[200px] md:max-w-none">{task.title}</div>
                         </td>
-                        <td className="p-3" onClick={(e) => e.stopPropagation()}>
+                        <td className="p-2 md:p-3" onClick={(e) => e.stopPropagation()}>
                           <Select
                             value={task.status}
                             onValueChange={(value: "not_picked" | "in_progress" | "completed") => 
@@ -403,7 +435,7 @@ export default function MyTasksPage() {
                             }
                           >
                             <SelectTrigger 
-                              className={`w-[140px] ${getStatusStyle(task.status)}`}
+                              className={`w-[120px] md:w-[140px] text-xs md:text-sm ${getStatusStyle(task.status)}`}
                             >
                               <SelectValue />
                             </SelectTrigger>
@@ -415,15 +447,15 @@ export default function MyTasksPage() {
                           </Select>
                         </td>
                         <td 
-                          className="p-3 cursor-pointer capitalize"
+                          className="p-2 md:p-3 cursor-pointer capitalize"
                           onClick={() => router.push(`/mytasks/${task.id}`)}
                         >
-                          <Badge variant={getPriorityColor(task.priority)}>
+                          <Badge variant={getPriorityColor(task.priority)} className="text-xs md:text-sm">
                             {task.priority}
                           </Badge>
                         </td>
                         <td 
-                          className={`p-3 cursor-pointer ${darkMode ? 'text-gray-300' : ''}`}
+                          className={`p-2 md:p-3 cursor-pointer text-sm md:text-base ${darkMode ? 'text-gray-300' : ''}`}
                           onClick={() => router.push(`/mytasks/${task.id}`)}
                         >
                           {new Date(task.deadline).toLocaleDateString()}

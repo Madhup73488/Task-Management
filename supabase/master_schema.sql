@@ -52,6 +52,7 @@ CREATE TABLE IF NOT EXISTS invitations (
   id uuid PRIMARY KEY DEFAULT uuid_generate_v4(),
   email text UNIQUE NOT NULL,
   invited_by uuid REFERENCES users(id) ON DELETE SET NULL,
+  role text CHECK (role IN ('admin', 'employee')) DEFAULT 'employee',
   status text CHECK (status IN ('pending', 'accepted', 'expired')) DEFAULT 'pending',
   created_at timestamp DEFAULT now()
 );
@@ -69,13 +70,26 @@ RETURNS TRIGGER
 LANGUAGE plpgsql
 SECURITY DEFINER
 AS $$
+DECLARE
+  _full_name TEXT;
+  _role TEXT;
 BEGIN
+  -- Log the raw_user_meta_data for debugging
+  RAISE NOTICE 'handle_new_user: NEW.raw_user_meta_data = %', NEW.raw_user_meta_data;
+
+  -- Safely extract full_name, defaulting to an empty string if not found
+  SELECT COALESCE(NEW.raw_user_meta_data->>'full_name', '') INTO _full_name;
+  -- Safely extract role, defaulting to 'employee' if not found
+  SELECT COALESCE(NEW.raw_user_meta_data->>'role', 'employee') INTO _role;
+
+  RAISE NOTICE 'handle_new_user: extracted full_name = %, role = %', _full_name, _role;
+
   INSERT INTO public.users (id, email, full_name, role, created_at)
   VALUES (
     NEW.id,
     NEW.email,
-    COALESCE(NEW.raw_user_meta_data->>'full_name', ''),
-    COALESCE(NEW.raw_user_meta_data->>'role', 'employee'),
+    _full_name,
+    _role,
     NOW()
   )
   ON CONFLICT (id) DO NOTHING;

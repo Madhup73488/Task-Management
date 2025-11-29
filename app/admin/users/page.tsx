@@ -66,36 +66,36 @@ export default function AdminUsersPage() {
   const [inviteSuccess, setInviteSuccess] = useState(false);
   const router = useRouter();
 
-  useEffect(() => {
-    const fetchData = async () => {
-      try {
-        const user = await getCurrentUser();
-        if (!user || user.role !== "admin") {
-          router.push("/auth/login");
-          return;
-        }
-        setCurrentUser(user);
-
-        const { data, error } = await supabase.from("users").select("*");
-        if (error) throw error;
-        setUsers(data as User[]);
-
-        // Fetch pending invitations
-        const { data: invitationsData, error: invError } = await supabase
-          .from("invitations")
-          .select("*")
-          .eq("status", "pending")
-          .order("created_at", { ascending: false });
-        
-        if (invError) throw invError;
-        setInvitations(invitationsData as Invitation[]);
-      } catch (err: any) {
-        setError(err.message || "An unexpected error occurred.");
-        console.error("Error fetching users:", err);
-      } finally {
-        setLoading(false);
+  const fetchData = async () => {
+    try {
+      const user = await getCurrentUser();
+      if (!user || user.role !== "admin") {
+        router.push("/auth/login");
+        return;
       }
-    };
+      setCurrentUser(user);
+
+      const { data, error } = await supabase.from("users").select("*");
+      if (error) throw error;
+      setUsers(data as User[]);
+
+      // Fetch all invitations
+      const { data: invitationsData, error: invError } = await supabase
+        .from("invitations")
+        .select("*")
+        .order("created_at", { ascending: false });
+
+      if (invError) throw invError;
+      setInvitations(invitationsData as Invitation[]);
+    } catch (err: any) {
+      setError(err.message || "An unexpected error occurred.");
+      console.error("Error fetching users:", err);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
     fetchData();
   }, [router]);
 
@@ -117,14 +117,8 @@ export default function AdminUsersPage() {
       setInviteEmail("");
       setInviteRole("employee");
       
-      // Refresh invitations list
-      const { data: invitationsData } = await supabase
-        .from("invitations")
-        .select("*")
-        .eq("status", "pending")
-        .order("created_at", { ascending: false });
-      
-      if (invitationsData) setInvitations(invitationsData as Invitation[]);
+      // Refresh all data after inviting a user
+      await fetchData();
       
       setTimeout(() => {
         setIsInviteDialogOpen(false);
@@ -138,21 +132,69 @@ export default function AdminUsersPage() {
   };
 
   const handleRevokeInvitation = async (invitationId: string) => {
-    if (!confirm("Are you sure you want to revoke this invitation?")) return;
+    if (!confirm("Are you sure you want to revoke this invitation? This will also delete the associated user account if it exists.")) return;
     
     try {
-      const { error } = await supabase
+      // First, get the email associated with the invitation
+      const { data: invitationToRevoke, error: fetchInvError } = await supabase
+        .from("invitations")
+        .select("email")
+        .eq("id", invitationId)
+        .single();
+
+      if (fetchInvError) throw fetchInvError;
+      if (!invitationToRevoke) throw new Error("Invitation not found.");
+
+      // Delete the invitation
+      console.log("Client: Deleting invitation from Supabase DB:", invitationId);
+      const { error: deleteInvError } = await supabase
         .from("invitations")
         .delete()
         .eq("id", invitationId);
 
-      if (error) throw error;
+      if (deleteInvError) {
+        console.error("Client: Error deleting invitation from DB:", deleteInvError);
+        throw deleteInvError;
+      }
+      console.log("Client: Invitation deleted from DB. Proceeding to delete user account.");
 
-      // Remove from state
-      setInvitations(invitations.filter(inv => inv.id !== invitationId));
+      // Prepare and log the payload for the API route
+      const deleteUserPayload = { email: invitationToRevoke.email };
+      console.log("Client: Sending delete user API request with payload:", deleteUserPayload);
+
+      // Get the current session token
+      const { data: { session } } = await supabase.auth.getSession();
+      const accessToken = session?.access_token;
+
+      // Attempt to delete the associated user account using the API route
+      const response = await fetch("/api/admin/delete-user", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...(accessToken ? { "Authorization": `Bearer ${accessToken}` } : {}),
+        },
+        body: JSON.stringify(deleteUserPayload),
+      });
+
+      if (!response.ok) {
+        // Log the raw response if it's not OK, to help debug JSON parsing issues
+        const errorText = await response.text();
+        console.error("Client: Delete user API responded with an error status:", response.status, errorText);
+        let errorData;
+        try {
+          errorData = JSON.parse(errorText);
+        } catch (parseError) {
+          console.error("Client: Failed to parse error response as JSON:", parseError);
+          throw new Error(`API Error: ${errorText || "Unknown error (failed to parse response)"}`);
+        }
+        throw new Error(errorData.error || "Failed to delete user account.");
+      }
+
+      // Refresh both user and invitation lists
+      await fetchData();
     } catch (err: any) {
-      setError(err.message || "Failed to revoke invitation.");
-      console.error("Error revoking invitation:", err);
+      setError(err.message || "Failed to revoke invitation or delete user.");
+      console.error("Error revoking invitation or deleting user:", err);
     }
   };
 
@@ -182,11 +224,8 @@ export default function AdminUsersPage() {
         setCurrentUser(updatedAuthUser); // Update the currentUser state
       }
 
-      setUsers((prevUsers) =>
-        prevUsers.map((user) =>
-          user.id === userId ? { ...user, role: newRole } : user
-        )
-      );
+      // Refresh all data after role change
+      await fetchData();
     } catch (err: any) {
       setError(err.message || "Failed to update user role.");
       console.error("Error updating user role:", err);
@@ -216,24 +255,24 @@ export default function AdminUsersPage() {
   }
 
   return (
-    <div className="p-6">
-      <Card className="border-gray-200 shadow-sm">
-        <CardHeader className="flex flex-row items-center justify-between bg-gradient-to-r from-gray-50 to-white border-b border-gray-100">
+    <div className="p-3 md:p-6">
+      <Card className="border-gray-200 dark:border-gray-800 shadow-sm">
+        <CardHeader className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 bg-gradient-to-r from-gray-50 to-white dark:from-gray-900 dark:to-black border-b border-gray-100 dark:border-gray-800 p-4 md:p-6">
           <div>
-            <CardTitle className="text-2xl font-bold text-gray-900">User Management</CardTitle>
-            <p className="text-sm text-gray-600 mt-1">Manage users and send invitations</p>
+            <CardTitle className="text-xl md:text-2xl font-bold text-gray-900 dark:text-white">User Management</CardTitle>
+            <p className="text-xs md:text-sm text-gray-600 dark:text-gray-400 mt-1">Manage users and send invitations</p>
           </div>
           <Dialog
             open={isInviteDialogOpen}
             onOpenChange={setIsInviteDialogOpen}
           >
             <DialogTrigger asChild>
-              <Button className="bg-blue-600 hover:bg-blue-700 text-white">
+              <Button className="bg-blue-600 hover:bg-blue-700 text-white text-sm w-full sm:w-auto">
                 <UserPlus size={16} className="mr-2" />
                 Invite User
               </Button>
             </DialogTrigger>
-            <DialogContent className="sm:max-w-[425px]">
+            <DialogContent className="sm:max-w-[425px] max-h-[90vh] overflow-y-auto">
               <DialogHeader>
                 <DialogTitle>Invite New User</DialogTitle>
               </DialogHeader>
@@ -279,92 +318,109 @@ export default function AdminUsersPage() {
             </DialogContent>
           </Dialog>
         </CardHeader>
-        <CardContent>
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Full Name</TableHead>
-                <TableHead>Email</TableHead>
-                <TableHead>Role</TableHead>
-                <TableHead>Actions</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {users.map((user) => (
-                <TableRow key={user.id}>
-                  <TableCell>{user.full_name}</TableCell>
-                  <TableCell>{user.email}</TableCell>
-                  <TableCell>{user.role}</TableCell>
-                  <TableCell>
-                    <Select
-                      value={user.role}
-                      onValueChange={(value: "admin" | "employee") =>
-                        handleRoleChange(user.id, value)
-                      }
-                      disabled={user.id === currentUser.id} // Prevent changing own role
-                    >
-                      <SelectTrigger className="w-[180px]">
-                        <SelectValue placeholder="Select role" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="employee">Employee</SelectItem>
-                        <SelectItem value="admin">Admin</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-        </CardContent>
-      </Card>
-
-      {/* Pending Invitations Section */}
-      {invitations.length > 0 && (
-        <Card className="border-gray-200 shadow-sm mt-6">
-          <CardHeader className="bg-gradient-to-r from-gray-50 to-white border-b border-gray-100">
-            <CardTitle className="text-xl font-bold text-gray-900">
-              Pending Invitations ({invitations.length})
-            </CardTitle>
-            <p className="text-sm text-gray-600 mt-1">
-              Users who have been invited but haven't signed up yet
-            </p>
-          </CardHeader>
-          <CardContent>
+        <CardContent className="p-0 md:p-6">
+          <div className="overflow-x-auto">
             <Table>
               <TableHeader>
-                <TableRow>
-                  <TableHead>Email</TableHead>
-                  <TableHead>Invited On</TableHead>
-                  <TableHead>Status</TableHead>
-                  <TableHead>Actions</TableHead>
+                <TableRow className="dark:border-gray-800">
+                  <TableHead className="text-gray-900 dark:text-white text-sm">Full Name</TableHead>
+                  <TableHead className="text-gray-900 dark:text-white text-sm">Email</TableHead>
+                  <TableHead className="text-gray-900 dark:text-white text-sm">Role</TableHead>
+                  <TableHead className="text-gray-900 dark:text-white text-sm">Actions</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {invitations.map((invitation) => (
-                  <TableRow key={invitation.id}>
-                    <TableCell>{invitation.email}</TableCell>
-                    <TableCell>
-                      {new Date(invitation.created_at).toLocaleDateString()}
+                {users.map((user) => (
+                  <TableRow key={user.id} className="dark:border-gray-800">
+                    <TableCell className="text-sm dark:text-gray-300">
+                      <div className="truncate max-w-[150px] md:max-w-none">{user.full_name}</div>
                     </TableCell>
-                    <TableCell>
-                      <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-yellow-100 text-yellow-800">
-                        {invitation.status}
-                      </span>
+                    <TableCell className="text-sm dark:text-gray-300">
+                      <div className="truncate max-w-[150px] md:max-w-none">{user.email}</div>
                     </TableCell>
+                    <TableCell className="text-sm dark:text-gray-300 capitalize">{user.role}</TableCell>
                     <TableCell>
-                      <Button
-                        variant="destructive"
-                        size="sm"
-                        onClick={() => handleRevokeInvitation(invitation.id)}
+                      <Select
+                        value={user.role}
+                        onValueChange={(value: "admin" | "employee") =>
+                          handleRoleChange(user.id, value)
+                        }
+                        disabled={user.id === currentUser.id} // Prevent changing own role
                       >
-                        Revoke
-                      </Button>
+                        <SelectTrigger className="w-[120px] md:w-[180px] text-xs md:text-sm dark:bg-gray-800 dark:border-gray-700 dark:text-white">
+                          <SelectValue placeholder="Select role" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="employee">Employee</SelectItem>
+                          <SelectItem value="admin">Admin</SelectItem>
+                        </SelectContent>
+                      </Select>
                     </TableCell>
                   </TableRow>
                 ))}
               </TableBody>
             </Table>
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* Invitations Section */}
+      {invitations.length > 0 && (
+        <Card className="border-gray-200 dark:border-gray-800 shadow-sm mt-4 md:mt-6">
+          <CardHeader className="bg-gradient-to-r from-gray-50 to-white dark:from-gray-900 dark:to-black border-b border-gray-100 dark:border-gray-800 p-4 md:p-6">
+            <CardTitle className="text-lg md:text-xl font-bold text-gray-900 dark:text-white">
+              Pending Invitations ({invitations.length})
+            </CardTitle>
+            <p className="text-xs md:text-sm text-gray-600 dark:text-gray-400 mt-1">
+              Invitation history and status
+            </p>
+          </CardHeader>
+          <CardContent className="p-0 md:p-6">
+            <div className="overflow-x-auto">
+              <Table>
+                <TableHeader>
+                  <TableRow className="dark:border-gray-800">
+                    <TableHead className="text-gray-900 dark:text-white text-sm">Email</TableHead>
+                    <TableHead className="text-gray-900 dark:text-white text-sm">Invited On</TableHead>
+                    <TableHead className="text-gray-900 dark:text-white text-sm">Status</TableHead>
+                    <TableHead className="text-gray-900 dark:text-white text-sm">Actions</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {invitations.map((invitation) => (
+                    <TableRow key={invitation.id} className="dark:border-gray-800">
+                      <TableCell className="text-sm dark:text-gray-300">
+                        <div className="truncate max-w-[150px] md:max-w-none">{invitation.email}</div>
+                      </TableCell>
+                      <TableCell className="text-sm dark:text-gray-300">
+                        {new Date(invitation.created_at).toLocaleDateString()}
+                      </TableCell>
+                      <TableCell>
+                        <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${
+                          invitation.status === 'accepted' 
+                            ? 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200' 
+                            : invitation.status === 'pending'
+                            ? 'bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-200'
+                            : 'bg-gray-100 text-gray-800 dark:bg-gray-800 dark:text-gray-200'
+                        }`}>
+                          {invitation.status === 'accepted' ? '✓ Signed Up' : invitation.status}
+                        </span>
+                      </TableCell>
+                      <TableCell>
+                        <Button
+                          variant="destructive"
+                          size="sm"
+                          className="text-xs"
+                          onClick={() => handleRevokeInvitation(invitation.id)}
+                        >
+                          {invitation.status === 'accepted' ? 'Delete' : 'Revoke'}
+                        </Button>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
           </CardContent>
         </Card>
       )}

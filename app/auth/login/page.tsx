@@ -1,8 +1,9 @@
 "use client";
 
-import { useState } from "react";
-import { useRouter } from "next/navigation";
+import { useState, useEffect } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import { signInWithEmail, resendConfirmationEmail, getCurrentUser, sendPasswordResetEmail, USE_MOCK_AUTH } from "@/lib/supabase/auth-helpers";
+import { acceptInvitation } from "@/lib/supabase/invitation-helpers"; // Import acceptInvitation
 import { Button } from "@/app/components/ui/button";
 import { Input } from "@/app/components/ui/input";
 import { Label } from "@/app/components/ui/label";
@@ -15,6 +16,21 @@ export default function LoginPage() {
   const [error, setError] = useState<string | null>(null);
   const [resetMessage, setResetMessage] = useState<string | null>(null); // New state for reset messages
   const router = useRouter();
+  const searchParams = useSearchParams();
+
+  // Check for signup success and pre-fill email
+  useEffect(() => {
+    const emailParam = searchParams.get("email");
+    const signupSuccess = searchParams.get("signup");
+
+    if (emailParam) {
+      setEmail(emailParam);
+    }
+
+    if (signupSuccess === "success") {
+      setResetMessage("Account created successfully! You can now log in.");
+    }
+  }, [searchParams]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -37,21 +53,45 @@ export default function LoginPage() {
         await signInWithEmail(email, password);
         const user = await getCurrentUser(); // Fetch the latest user data after sign-in
 
-        if (user && user.role === 'admin') {
-          router.push("/admin/dashboard");
-        } else if (user) {
-          router.push("/dashboard");
+        if (user) {
+          // Mark invitation as accepted after successful signup/login
+          await acceptInvitation(email, user.id);
+
+          if (user.role === 'admin') {
+            router.push("/admin/dashboard");
+          } else {
+            router.push("/dashboard");
+          }
         } else {
           setError("Login successful, but could not retrieve user data. Please try again.");
         }
       }
     } catch (err: any) {
       console.error("Sign-in error:", err); // Log the full error object
-      if (err.message === "Email not confirmed") {
-        setError("Please check your email to confirm your account before signing in.");
-      } else {
-        setError(err.message || "An unexpected error occurred.");
+      
+      // Handle different error types
+      let errorMessage = "An unexpected error occurred.";
+      
+      if (err?.message) {
+        errorMessage = err.message;
+        
+        // Check for specific error messages
+        if (err.message.includes("Email not confirmed")) {
+          errorMessage = "Please check your email to confirm your account before signing in.";
+        } else if (err.message.includes("Invalid login credentials")) {
+          errorMessage = "Invalid email or password. Please try again.";
+        } else if (err.message.includes("User not found")) {
+          errorMessage = "No account found with this email. Please sign up first.";
+        }
+      } else if (typeof err === 'string') {
+        errorMessage = err;
+      } else if (err?.error_description) {
+        errorMessage = err.error_description;
+      } else if (err?.error) {
+        errorMessage = err.error;
       }
+      
+      setError(errorMessage);
     } finally {
       setLoading(false);
     }
@@ -107,6 +147,7 @@ export default function LoginPage() {
                 required
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
+                suppressHydrationWarning={true}
               />
             </div>
             <div className="grid gap-2">
@@ -120,6 +161,7 @@ export default function LoginPage() {
                     className="px-0 text-xs text-muted-foreground hover:text-foreground"
                     onClick={handleForgotPassword}
                     disabled={loading}
+                    suppressHydrationWarning={true}
                   >
                     Forgot password?
                   </Button>
@@ -131,11 +173,12 @@ export default function LoginPage() {
                 required
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
+                suppressHydrationWarning={true}
               />
             </div>
             {error && <p className="text-red-500 text-sm">{error}</p>}
             {resetMessage && <p className="text-green-500 text-sm">{resetMessage}</p>} {/* Display reset message */}
-            <Button type="submit" className="w-full" disabled={loading}>
+            <Button type="submit" className="w-full" disabled={loading} suppressHydrationWarning={true}>
               {loading ? "Signing in..." : "Sign In"}
             </Button>
             {error === "Please check your email to confirm your account before signing in." && (
@@ -145,6 +188,7 @@ export default function LoginPage() {
                 className="w-full mt-2"
                 onClick={handleResendConfirmation}
                 disabled={loading}
+                suppressHydrationWarning={true}
               >
                 Resend Confirmation Email
               </Button>

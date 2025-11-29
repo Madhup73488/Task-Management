@@ -4,9 +4,11 @@ import { sendRegistrationConfirmationEmail } from '@/lib/brevo/emailService';
 export async function GET() {
   try {
     // Replace with a real email address for testing
-    const testEmail = 'madhup73488@gmail.com';
+    const testEmail = 'madhup73488@gmail.com'; // Ensure this is a valid email for testing
     const testName = 'Test User';
     const testVerificationLink = 'http://localhost:3000/auth/verify?token=testtoken123';
+
+    console.log('Test Email:', testEmail); // Log the email before sending
 
     const result = await sendRegistrationConfirmationEmail(
       testEmail,

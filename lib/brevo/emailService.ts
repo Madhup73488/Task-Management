@@ -1,7 +1,19 @@
 import fetch from 'node-fetch';
+import { createClient } from '@supabase/supabase-js';
 
-const BREVO_API_URL = 'https://api.brevo.com/v3/smtp/email';
+// ----------------------------
+// Supabase Initialization
+// ----------------------------
+const supabase = createClient(
+  process.env.NEXT_PUBLIC_SUPABASE_URL!,
+  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+);
 
+const BREVO_API_URL = "https://api.brevo.com/v3/smtp/email";
+
+// ----------------------------------------------------
+// Core Email Sender
+// ----------------------------------------------------
 interface SendEmailParams {
   to: { email: string; name?: string }[];
   subject: string;
@@ -19,34 +31,42 @@ export async function sendEmail({
   to,
   subject,
   htmlContent,
-  sender, // Remove default here, will set below
+  sender,
   replyTo,
   cc,
   bcc,
   headers,
   params,
-  tags,
+  tags
 }: SendEmailParams) {
+  
   const apiKey = process.env.NEXT_PUBLIC_BREVO_API_KEY;
-  const defaultSenderEmail = process.env.NEXT_PUBLIC_BREVO_SENDER_EMAIL || 'no-reply@yourdomain.com';
-  const defaultSenderName = 'Task Management System';
+  const defaultSenderEmail =
+    process.env.NEXT_PUBLIC_BREVO_SENDER_EMAIL || "no-reply@yourdomain.com";
 
-  const finalSender = sender || { email: defaultSenderEmail, name: defaultSenderName };
+  const finalSender = sender || {
+    email: defaultSenderEmail,
+    name: "Task Management System",
+  };
 
+  // Missing API KEY
   if (!apiKey) {
-    console.error('BREVO_API_KEY is not defined in environment variables. Cannot send email.');
-    return { success: false, message: 'Brevo API key not configured.' };
+    console.error("❌ Brevo API key missing.");
+    return { success: false, message: "Brevo API key not defined." };
   }
 
+  // Missing sender email
   if (!finalSender.email) {
-    console.error('Sender email is not defined. Cannot send email.');
-    return { success: false, message: 'Sender email not configured.' };
+    console.error("❌ Sender email is missing.");
+    return { success: false, message: "Sender email missing." };
   }
 
-  console.log('Attempting to send email with Brevo API key:', apiKey ? 'Configured' : 'Not Configured');
-  console.log('Using sender email:', finalSender.email);
+  // Log params
+  console.log("📬 Sending email...");
+  console.log("➡ Sender:", finalSender.email);
+  console.log("➡ To:", JSON.stringify(to));
 
-  const emailData = {
+  const body = {
     sender: finalSender,
     to,
     subject,
@@ -56,143 +76,167 @@ export async function sendEmail({
     bcc,
     headers,
     params,
-    tags,
+    tags
   };
 
   try {
     const response = await fetch(BREVO_API_URL, {
-      method: 'POST',
+      method: "POST",
       headers: {
-        'Content-Type': 'application/json',
-        'api-key': apiKey,
+        "Content-Type": "application/json",
+        "api-key": apiKey,
       },
-      body: JSON.stringify(emailData),
+      body: JSON.stringify(body),
     });
 
     const data = await response.json();
 
-    if (response.ok) {
-      console.log('Email sent successfully. Returned data: ' + JSON.stringify(data));
-      return { success: true, data };
-    } else {
-      console.error('Error sending email:', data);
+    if (!response.ok) {
+      console.error("❌ Brevo Error:", data);
       return { success: false, error: data };
     }
+
+    console.log("✅ Email sent:", data);
+    return { success: true, data };
+
   } catch (error) {
-    console.error('Error sending email:', error);
+    console.error("🔥 Email sending failed:", error);
     return { success: false, error };
   }
 }
 
-// Specific email functions for different use cases
-
+// ----------------------------------------------------
+// Registration Confirmation Email
+// ----------------------------------------------------
 export async function sendRegistrationConfirmationEmail(
   toEmail: string,
   toName: string,
   verificationLink: string
 ) {
-  const subject = 'Welcome to Task Management System! Please confirm your email';
+  const subject = "Welcome! Please confirm your email";
   const htmlContent = `
-    <html>
-      <head></head>
-      <body>
-        <p>Hello ${toName},</p>
-        <p>Thank you for registering with Task Management System. Please click the link below to confirm your email address:</p>
-        <p><a href="${verificationLink}">Confirm Email</a></p>
-        <p>If you did not register for this service, please ignore this email.</p>
-        <p>Best regards,</p>
-        <p>The Task Management Team</p>
-      </body>
-    </html>
+    <p>Hello ${toName},</p>
+    <p>Please confirm your email using the link below:</p>
+    <p><a href="${verificationLink}">Confirm Email</a></p>
   `;
-  return sendEmail({ to: [{ email: toEmail, name: toName }], subject, htmlContent, tags: ['registration'] });
+
+  return sendEmail({
+    to: [{ email: toEmail, name: toName }],
+    subject,
+    htmlContent,
+    tags: ["registration"],
+  });
 }
 
+// ----------------------------------------------------
+// Password Reset Email
+// ----------------------------------------------------
 export async function sendPasswordResetEmail(
   toEmail: string,
   toName: string,
   resetLink: string
 ) {
-  const subject = 'Task Management System - Password Reset Request';
+  const subject = "Reset Your Password";
   const htmlContent = `
-    <html>
-      <head></head>
-      <body>
-        <p>Hello ${toName},</p>
-        <p>You have requested to reset your password for your Task Management System account. Please click the link below to reset your password:</p>
-        <p><a href="${resetLink}">Reset Password</a></p>
-        <p>This link will expire in a short period. If you did not request a password reset, please ignore this email.</p>
-        <p>Best regards,</p>
-        <p>The Task Management Team</p>
-      </body>
-    </html>
+    <p>Hello ${toName},</p>
+    <p>Click below to reset your password:</p>
+    <a href="${resetLink}">Reset Password</a>
   `;
-  return sendEmail({ to: [{ email: toEmail, name: toName }], subject, htmlContent, tags: ['password-reset'] });
+
+  return sendEmail({
+    to: [{ email: toEmail, name: toName }],
+    subject,
+    htmlContent,
+    tags: ["password-reset"],
+  });
 }
 
+// ----------------------------------------------------
+// ⭐ OPTION 1 FIXED: TASK ASSIGNMENT EMAIL
+// ----------------------------------------------------
 export async function sendTaskAssignmentNotification(
-  toEmail: string,
-  toName: string,
+  userId: string,            // RECEIVES ONLY USER ID
   taskTitle: string,
   taskLink: string,
   assignerName: string
 ) {
+  console.log("📌 Fetching recipient info for userId:", userId);
+
+  // Fetch email + name from Supabase
+  const { data: user, error } = await supabase
+    .from("users")
+    .select("email, full_name")
+    .eq("id", userId)
+    .single();
+
+  if (error || !user) {
+    console.error("❌ Could not fetch user for task email:", error);
+    return { success: false, message: "User email not found" };
+  }
+
+  const { email, full_name } = user;
+
+  if (!email) {
+    console.error("❌ User has no email stored:", userId);
+    return { success: false, message: "Email missing" };
+  }
+
+  console.log("📩 Sending task assignment to:", email);
+
   const subject = `New Task Assigned: ${taskTitle}`;
+
   const htmlContent = `
-    <html>
-      <head></head>
-      <body>
-        <p>Hello ${toName},</p>
-        <p>You have been assigned a new task by ${assignerName}: <strong>${taskTitle}</strong>.</p>
-        <p>You can view the task details here: <a href="${taskLink}">View Task</a></p>
-        <p>Best regards,</p>
-        <p>The Task Management Team</p>
-      </body>
-    </html>
+    <p>Hello ${full_name || "User"},</p>
+    <p>You have been assigned a new task by <strong>${assignerName}</strong>.</p>
+    <p><strong>Task:</strong> ${taskTitle}</p>
+    <p>View task: <a href="${taskLink}">Click here</a></p>
   `;
-  return sendEmail({ to: [{ email: toEmail, name: toName }], subject, htmlContent, tags: ['task-assignment'] });
+
+  return sendEmail({
+    to: [{ email, name: full_name }],
+    subject,
+    htmlContent,
+    tags: ["task-assignment"],
+  });
 }
 
-export async function sendAdminAlert(
-  toEmail: string,
-  alertSubject: string,
-  alertMessage: string
-) {
-  const subject = `Admin Alert: ${alertSubject}`;
+// ----------------------------------------------------
+// Admin Alert
+// ----------------------------------------------------
+export async function sendAdminAlert(toEmail: string, subject: string, alert: string) {
   const htmlContent = `
-    <html>
-      <head></head>
-      <body>
-        <p>Dear Admin,</p>
-        <p>An important alert has been triggered in the Task Management System:</p>
-        <p><strong>Subject:</strong> ${alertSubject}</p>
-        <p><strong>Message:</strong> ${alertMessage}</p>
-        <p>Please take appropriate action.</p>
-        <p>Best regards,</p>
-        <p>The Task Management System Automated Alert</p>
-      </body>
-    </html>
+    <p>Admin Alert:</p>
+    <p>${alert}</p>
   `;
-  return sendEmail({ to: [{ email: toEmail, name: 'Admin' }], subject, htmlContent, tags: ['admin-alert'] });
+
+  return sendEmail({
+    to: [{ email: toEmail, name: "Admin" }],
+    subject,
+    htmlContent,
+    tags: ["admin-alert"],
+  });
 }
 
+// ----------------------------------------------------
+// Marketing Email
+// ----------------------------------------------------
 export async function sendMarketingEmail(
   toEmail: string,
   toName: string,
   campaignName: string,
   content: string
 ) {
-  const subject = `Exciting News from Task Management System - ${campaignName}`;
+  const subject = `Update: ${campaignName}`;
+
   const htmlContent = `
-    <html>
-      <head></head>
-      <body>
-        <p>Hello ${toName},</p>
-        ${content}
-        <p>Best regards,</p>
-        <p>The Task Management Team</p>
-      </body>
-    </html>
+    <p>Hello ${toName},</p>
+    ${content}
   `;
-  return sendEmail({ to: [{ email: toEmail, name: toName }], subject, htmlContent, tags: ['marketing', campaignName] });
+
+  return sendEmail({
+    to: [{ email: toEmail, name: toName }],
+    subject,
+    htmlContent,
+    tags: ["marketing", campaignName],
+  });
 }

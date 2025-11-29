@@ -1,4 +1,5 @@
 import { supabase } from "./client";
+import { sendEmail } from "@/lib/brevo/emailService";
 
 export async function createInvitation(
   email: string,
@@ -55,6 +56,7 @@ export async function createInvitation(
       {
         email,
         invited_by: invitedBy,
+        role,
         status: "pending",
       },
     ])
@@ -62,32 +64,58 @@ export async function createInvitation(
 
   if (error) throw error;
 
-  // In a real application, you would send an email here with the signup link
-  // For now, we'll just log the invitation details
+  // Send invitation email
   const signupUrl = `${
-    window.location.origin
+    process.env.NEXT_PUBLIC_BASE_URL
   }/auth/signup?email=${encodeURIComponent(email)}`;
-  console.log("Invitation created! Share this URL with the user:", signupUrl);
-  console.log(
-    "User should sign up with email:",
-    email,
-    "and will have role:",
-    role
-  );
+
+  const subject = "You're invited to join Task Management System!";
+  const htmlContent = `
+    <p>Hello,</p>
+    <p>You have been invited to join the Task Management System by Mallika M. Please click the link below to sign up and accept your invitation:</p>
+    <p><a href="${signupUrl}">Accept Invitation and Sign Up</a></p>
+    <p>Your role will be: <strong>${role}</strong></p>
+    <p>If you did not expect this invitation, you can safely ignore this email.</p>
+  `;
+
+  const emailResult = await sendEmail({
+    to: [{ email, name: email }], // Use email as name if full_name is not available
+    subject,
+    htmlContent,
+    tags: ["invitation"],
+  });
+
+  if (!emailResult.success) {
+    console.error("Failed to send invitation email:", emailResult.error);
+    // Optionally, you might want to throw an error or handle this more gracefully
+    // depending on whether a failed email send should prevent the invitation from being created in DB.
+    // For now, we'll let the DB invitation creation succeed even if email fails.
+  } else {
+    console.log("Invitation email sent successfully to:", email);
+  }
 
   return data;
 }
 
 export async function acceptInvitation(email: string, userId: string) {
-  const { data: invitation, error: fetchError } = await supabase
+  // Try to find a pending invitation
+  const { data: invitations, error: fetchError } = await supabase
     .from("invitations")
     .select("*")
     .eq("email", email)
-    .eq("status", "pending")
-    .single();
+    .eq("status", "pending");
 
+  // If there's an error fetching, throw it
   if (fetchError) throw fetchError;
-  if (!invitation) throw new Error("Invitation not found or already accepted");
+
+  // If no pending invitation exists, that's okay - user might have already accepted or signed up without invitation
+  if (!invitations || invitations.length === 0) {
+    console.log("No pending invitation found for:", email);
+    return null;
+  }
+
+  // Get the first pending invitation
+  const invitation = invitations[0];
 
   // Mark invitation as accepted
   const { error: updateError } = await supabase

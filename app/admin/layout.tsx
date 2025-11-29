@@ -34,8 +34,16 @@ export default function AdminLayout({
   const [user, setUser] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [darkMode, setDarkMode] = useState(false);
+  const [notificationCount, setNotificationCount] = useState(0); // Initialize with 0, will be updated when actual notifications arrive
+  const [searchQuery, setSearchQuery] = useState("");
   const router = useRouter();
   const pathname = usePathname();
+
+  // Effect to update searchQuery when URL changes (e.g., direct navigation or back/forward)
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    setSearchQuery(params.get("search") || "");
+  }, [pathname]);
 
   // Load dark mode preference
   useEffect(() => {
@@ -246,25 +254,7 @@ export default function AdminLayout({
               darkMode ? "bg-black border-gray-800" : "bg-white border-gray-200"
             }`}
           >
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-4 flex-1">
-                <div className="relative flex-1 max-w-md">
-                  <Search
-                    className={`absolute left-3 top-1/2 transform -translate-y-1/2 ${
-                      darkMode ? "text-gray-500" : "text-gray-400"
-                    }`}
-                    size={18}
-                  />
-                  <Input
-                    placeholder="Search users, tasks..."
-                    className={`pl-10 ${
-                      darkMode
-                        ? "bg-gray-900 border-gray-800 text-white placeholder:text-gray-500"
-                        : "bg-gray-50 border-gray-200"
-                    }`}
-                  />
-                </div>
-              </div>
+            <div className="flex items-center justify-end">
               <div className="flex items-center gap-3">
                 <Button
                   variant="ghost"
@@ -276,7 +266,11 @@ export default function AdminLayout({
                   }`}
                 >
                   <Bell size={20} className={darkMode ? "text-gray-300" : ""} />
-                  <span className="absolute top-1 right-1 w-2 h-2 bg-red-500 rounded-full"></span>
+                  {notificationCount > 0 && (
+                    <span className="absolute -top-1 -right-1 flex items-center justify-center w-5 h-5 rounded-full bg-red-500 text-white text-xs font-bold">
+                      {notificationCount}
+                    </span>
+                  )}
                 </Button>
                 <Button
                   variant="ghost"

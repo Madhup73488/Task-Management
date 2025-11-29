@@ -1,8 +1,10 @@
 "use client";
 
-import { useState } from "react";
-import { useRouter } from "next/navigation";
+import { useState, useEffect } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import { signUpNewUser } from "@/lib/supabase/auth-helpers";
+import { acceptInvitation } from "@/lib/supabase/invitation-helpers";
+import { supabase } from "@/lib/supabase/client";
 import { Button } from "@/app/components/ui/button";
 import { Input } from "@/app/components/ui/input";
 import { Label } from "@/app/components/ui/label";
@@ -14,7 +16,40 @@ export default function SignUpPage() {
   const [fullName, setFullName] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [invitationRole, setInvitationRole] = useState<"admin" | "employee">("employee");
   const router = useRouter();
+  const searchParams = useSearchParams();
+
+  // Check for invitation when component mounts
+  useEffect(() => {
+    const emailParam = searchParams.get("email");
+    if (emailParam) {
+      setEmail(emailParam);
+      
+      // Clear any existing session first to avoid refresh errors
+      const initializeSignup = async () => {
+        try {
+          await supabase.auth.signOut();
+        } catch (err) {
+          console.log("No existing session to clear");
+        }
+        
+        // Fetch the invitation to get the role
+        const { data, error } = await supabase
+          .from("invitations")
+          .select("role")
+          .eq("email", emailParam)
+          .eq("status", "pending")
+          .single();
+        
+        if (data && !error) {
+          setInvitationRole(data.role || "employee");
+        }
+      };
+      
+      initializeSignup();
+    }
+  }, [searchParams]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -22,13 +57,48 @@ export default function SignUpPage() {
     setError(null);
 
     try {
-      const { user, session } = await signUpNewUser(email, password, fullName);
+      // Check if this is an invited user
+      const emailParam = searchParams.get("email");
+      
+      if (emailParam) {
+        // Use the API route for invited users (auto-confirms email)
+        const response = await fetch("/api/auth/signup-invited", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            email,
+            password,
+            fullName,
+            role: invitationRole,
+          }),
+        });
 
-      if (!session) {
-        // email confirmation needed
-        router.push("/auth/verify");
+        if (!response.ok) {
+          const errorData = await response.json();
+          throw new Error(errorData.error || "Failed to create account");
+        }
+
+        const responseData = await response.json();
+
+        if (responseData.user) {
+          // Mark invitation as accepted
+          await acceptInvitation(email, responseData.user.id);
+          
+          // Redirect to login page with success message
+          router.push(`/auth/login?email=${encodeURIComponent(email)}&signup=success`);
+        }
       } else {
-        router.push("/dashboard");
+        // Regular signup (not invited)
+        const { user, session } = await signUpNewUser(email, password, fullName, invitationRole);
+
+        if (!session) {
+          // email confirmation needed
+          router.push("/auth/verify");
+        } else {
+          router.push("/dashboard");
+        }
       }
     } catch (err: any) {
       setError(err.message || "An unexpected error occurred.");
@@ -62,6 +132,7 @@ export default function SignUpPage() {
                 value={fullName}
                 onChange={(e) => setFullName(e.target.value)}
                 className="bg-gray-100 text-gray-900 border-gray-300 placeholder-gray-500"
+                suppressHydrationWarning={true}
               />
             </div>
 
@@ -77,6 +148,7 @@ export default function SignUpPage() {
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 className="bg-gray-100 text-gray-900 border-gray-300 placeholder-gray-500"
+                suppressHydrationWarning={true}
               />
             </div>
 
@@ -92,12 +164,13 @@ export default function SignUpPage() {
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 className="bg-gray-100 text-gray-900 border-gray-300 placeholder-gray-500"
+                suppressHydrationWarning={true}
               />
             </div>
 
             {error && <p className="text-red-600 text-sm text-center">{error}</p>}
 
-            <Button type="submit" className="w-full mt-4 bg-blue-600 text-white hover:bg-blue-500" disabled={loading}>
+            <Button type="submit" className="w-full mt-4 bg-blue-600 text-white hover:bg-blue-500" disabled={loading} suppressHydrationWarning={true}>
               {loading ? "Creating Account..." : "Sign Up"}
             </Button>
 

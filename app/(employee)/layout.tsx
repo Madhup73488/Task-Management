@@ -36,8 +36,15 @@ export default function EmployeeLayout({
   const [showNotifications, setShowNotifications] = useState(false);
   const [tasks, setTasks] = useState<any[]>([]);
   const [darkMode, setDarkMode] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
   const router = useRouter();
   const pathname = usePathname();
+
+  // Effect to update searchQuery when URL changes
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    setSearchQuery(params.get("search") || "");
+  }, [pathname]);
 
   // Load dark mode preference
   useEffect(() => {
@@ -225,6 +232,18 @@ export default function EmployeeLayout({
                   />
                   <Input
                     placeholder="Search tasks..."
+                    value={searchQuery}
+                    onChange={(e) => {
+                      setSearchQuery(e.target.value);
+                      // Update URL query parameter
+                      const params = new URLSearchParams(window.location.search);
+                      if (e.target.value) {
+                        params.set("search", e.target.value);
+                      } else {
+                        params.delete("search");
+                      }
+                      router.replace(`${pathname}?${params.toString()}`);
+                    }}
                     className={`pl-10 ${
                       darkMode
                         ? 'bg-gray-900 border-gray-800 text-white placeholder:text-gray-500'

@@ -50,59 +50,53 @@ export async function getCurrentUser() {
     return MOCK_ADMIN_USER;
   }
 
-  const { data: { session }, error: sessionError } = await supabase.auth.getSession();
+  try {
+    const { data: { session }, error: sessionError } = await supabase.auth.getSession();
 
-  if (sessionError) {
-    console.error("Error getting session:", sessionError);
+    if (sessionError) {
+      console.error("Error getting session:", sessionError);
+      return null;
+    }
+
+    if (!session) {
+      return null;
+    }
+
+    const {
+      data: { user },
+      error: userError,
+    } = await supabase.auth.getUser();
+
+    if (userError) {
+      console.error("Error getting user:", userError);
+      return null;
+    }
+    
+    if (!user) {
+      return null;
+    }
+
+    // Fetch the user's role from the public.users table
+    const { data: userProfile, error: profileError } = await supabase
+      .from('users')
+      .select('role')
+      .eq('id', user.id)
+      .single();
+
+    if (profileError) {
+      console.error("Error getting user profile from 'public.users':", profileError);
+      // If there's an error fetching the profile (e.g., no entry yet),
+      // the user might have just signed up and the trigger hasn't completed yet.
+      // Return null to force a re-authentication
+      return null;
+    }
+
+    // Combine the auth user object with the role from the public.users table
+    return { ...user, role: userProfile.role };
+  } catch (error) {
+    console.error("Unexpected error in getCurrentUser:", error);
     return null;
   }
-
-  if (!session) {
-    return null;
-  }
-
-  // Refresh the session to ensure the latest user metadata is fetched
-  const { data: { session: refreshedSession }, error: refreshError } = await supabase.auth.refreshSession();
-
-  if (refreshError) {
-    console.error("Error refreshing session:", refreshError);
-    // Proceed with existing session if refresh fails
-  }
-  
-  const currentSession = refreshedSession || session;
-
-  if (!currentSession) {
-    return null;
-  }
-
-  const {
-    data: { user },
-    error: userError,
-  } = await supabase.auth.getUser(); // This will now use the refreshed session
-
-  if (userError) {
-    console.error("Error getting user:", userError);
-    return null;
-  }
-  
-  if (!user) {
-    return null;
-  }
-
-  // Fetch the user's role from the public.users table
-  const { data: userProfile, error: profileError } = await supabase
-    .from('users')
-    .select('role')
-    .eq('id', user.id)
-    .single();
-
-  if (profileError) {
-    console.error("Error getting user profile:", profileError);
-    return null;
-  }
-
-  // Combine the auth user object with the role from the public.users table
-  return { ...user, role: userProfile.role };
 }
 
 // 🟢 Sign up a new user
@@ -116,17 +110,51 @@ export async function signUpNewUser(
   if (USE_MOCK_AUTH) {
     console.log("Mock signup called, but not fully implemented. Proceeding with real signup.");
   }
+  console.log("Signing up new user with data:", { email, fullName, role }); // Debug log
   const { data, error } = await supabase.auth.signUp({
     email,
     password,
     options: {
       data: { full_name: fullName, role },
-      // We will send our own confirmation email, so no redirectTo here
       emailRedirectTo: `${process.env.NEXT_PUBLIC_BASE_URL}/auth/verify`,
+      // Skip email confirmation for invited users
+      // Note: This requires "Enable email confirmations" to be disabled in Supabase settings,
+      // OR the Service Role key to be used (not recommended for client-side)
     },
   });
 
   if (error) throw error;
+
+  // Ensure user entry is created in public.users table
+  if (data.user) {
+    // Wait a moment for the trigger to complete
+    await new Promise(resolve => setTimeout(resolve, 500));
+    
+    // Check if user exists in public.users, if not create manually
+    const { data: existingUser } = await supabase
+      .from('users')
+      .select('id')
+      .eq('id', data.user.id)
+      .single();
+    
+    if (!existingUser) {
+      console.log("User not found in public.users, creating manually...");
+      const { error: insertError } = await supabase
+        .from('users')
+        .insert([{
+          id: data.user.id,
+          email: email,
+          full_name: fullName,
+          role: role,
+        }]);
+      
+      if (insertError) {
+        console.error("Error creating user in public.users:", insertError);
+      } else {
+        console.log("User created successfully in public.users");
+      }
+    }
+  }
 
   // If email confirmation is required (no session immediately), send Brevo email
   if (!data.session) {
